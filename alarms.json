@@ -1,1 +1,8 @@
-{}
+{
+  "ETH": [
+    {
+      "target": 2051.0,
+      "condition": "below"
+    }
+  ]
+}
