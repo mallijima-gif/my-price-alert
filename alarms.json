@@ -3,6 +3,26 @@
     {
       "target": 2051.0,
       "condition": "below"
+    },
+    {
+      "target": 2082.0,
+      "condition": "below"
+    }
+  ],
+  "BTC": [
+    {
+      "target": 74098.0,
+      "condition": "below"
+    },
+    {
+      "target": 74098.0,
+      "condition": "below"
+    }
+  ],
+  "TSLA": [
+    {
+      "target": 410.0,
+      "condition": "below"
     }
   ]
 }
