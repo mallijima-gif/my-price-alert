@@ -7,6 +7,10 @@
     {
       "target": 2082.0,
       "condition": "below"
+    },
+    {
+      "target": 2007.0,
+      "condition": "below"
     }
   ],
   "BTC": [
@@ -16,6 +20,10 @@
     },
     {
       "target": 74098.0,
+      "condition": "below"
+    },
+    {
+      "target": 74200.0,
       "condition": "below"
     }
   ],
