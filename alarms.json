@@ -32,5 +32,33 @@
       "target": 410.0,
       "condition": "below"
     }
+  ],
+  "HOOD": [
+    {
+      "target": 71.0,
+      "condition": "below"
+    }
+  ],
+  "ATOM": [
+    {
+      "target": 2.31,
+      "condition": "above"
+    }
+  ],
+  "BLUR": [
+    {
+      "target": 0.0276,
+      "condition": "above"
+    }
+  ],
+  "EIGEN": [
+    {
+      "target": 0.2357,
+      "condition": "above"
+    },
+    {
+      "target": 0.2178,
+      "condition": "below"
+    }
   ]
 }
