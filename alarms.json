@@ -25,6 +25,10 @@
     {
       "target": 74200.0,
       "condition": "below"
+    },
+    {
+      "target": 53993.0,
+      "condition": "below"
     }
   ],
   "TSLA": [
