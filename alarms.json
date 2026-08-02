@@ -37,10 +37,6 @@
     {
       "target": 0.2357,
       "condition": "above"
-    },
-    {
-      "target": 0.2178,
-      "condition": "below"
     }
   ]
 }
