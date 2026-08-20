@@ -42,5 +42,23 @@
       "target": 0.2357,
       "condition": "above"
     }
+  ],
+  "SNDKUSDT.P": [
+    {
+      "target": 1518.0,
+      "condition": "below"
+    }
+  ],
+  "SOL": [
+    {
+      "target": 94.04,
+      "condition": "above"
+    }
+  ],
+  "PLTR": [
+    {
+      "target": 86.5,
+      "condition": "below"
+    }
   ]
 }
