@@ -45,12 +45,6 @@
       "condition": "below"
     }
   ],
-  "SOL": [
-    {
-      "target": 94.04,
-      "condition": "above"
-    }
-  ],
   "PLTR": [
     {
       "target": 86.5,
