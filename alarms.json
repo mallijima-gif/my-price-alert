@@ -33,12 +33,6 @@
       "condition": "above"
     }
   ],
-  "EIGEN": [
-    {
-      "target": 0.2357,
-      "condition": "above"
-    }
-  ],
   "SNDKUSDT.P": [
     {
       "target": 1518.0,
