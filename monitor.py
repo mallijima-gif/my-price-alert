@@ -1,5 +1,8 @@
 import os
 import json
+import math
+import re
+from urllib.parse import quote
 import requests
 
 ALARMS_FILE = 'alarms.json'
@@ -24,13 +27,102 @@ def save_json(filepath, data):
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram 설정 누락")
-        return
+        return False
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': message}
     try:
-        requests.post(url, data=payload, timeout=5)
+        response = requests.post(url, data=payload, timeout=5)
+        response.raise_for_status()
+        return response.json().get('ok') is True
     except Exception as e:
         print(f"텔레그램 발송 실패: {e}")
+        return False
+
+def split_symbol(symbol):
+    upper = symbol.strip().upper()
+    if ':' in upper:
+        market, ticker = upper.split(':', 1)
+        if market not in ('KR', 'US', 'COIN') or not ticker:
+            raise ValueError('Invalid market prefix')
+    else:
+        ticker = upper
+        if ticker.isdigit():
+            market = 'KR'
+        elif ticker.startswith('KRW-') or ticker.endswith(('USDT', 'USDC')):
+            market = 'COIN'
+        else:
+            # Preserve bare coin symbols; unresolved symbols are checked as US stocks.
+            market = 'AUTO'
+    if market == 'KR':
+        valid = re.fullmatch(r'[0-9]{6}', ticker)
+    else:
+        valid = re.fullmatch(r'[A-Z0-9][A-Z0-9.-]{0,19}', ticker)
+    if not valid:
+        raise ValueError('Invalid symbol')
+    return market, ticker
+
+def fetch_us_prices(symbols):
+    prices = {}
+    for sym in dict.fromkeys(symbols):
+        yahoo_symbol = sym.upper().replace('.', '-')
+        try:
+            response = requests.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(yahoo_symbol, safe='')}",
+                params={'interval': '1d', 'range': '5d'},
+                headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'},
+                timeout=10,
+            )
+            response.raise_for_status()
+            chart = response.json().get('chart') or {}
+            results = chart.get('result') or []
+            if chart.get('error') or not results:
+                continue
+            meta = results[0].get('meta') or {}
+            if meta.get('currency') != 'USD' or meta.get('instrumentType') not in ('EQUITY', 'ETF'):
+                continue
+            price = float(meta['regularMarketPrice'])
+            if math.isfinite(price) and price > 0:
+                prices[sym] = price
+        except (requests.RequestException, ValueError, KeyError, TypeError) as e:
+            print(f"미장 가격 조회 실패 ({sym}): {e}")
+    return prices
+
+def fetch_alarm_prices(symbols):
+    routes = {}
+    for symbol in symbols:
+        try:
+            routes[symbol] = split_symbol(symbol)
+        except ValueError:
+            print(f"잘못된 종목 코드: {symbol}")
+
+    crypto_symbols = list(dict.fromkeys(
+        ticker for market, ticker in routes.values() if market in ('COIN', 'AUTO')
+    ))
+    stock_symbols = list(dict.fromkeys(
+        ticker for market, ticker in routes.values() if market == 'KR'
+    ))
+    crypto_prices = fetch_binance_prices(crypto_symbols)
+    stock_prices = fetch_naver_prices(stock_symbols)
+    us_symbols = [
+        ticker for market, ticker in routes.values()
+        if market == 'US' or (market == 'AUTO' and ticker not in crypto_prices)
+    ]
+    us_prices = fetch_us_prices(us_symbols)
+
+    prices = {}
+    currencies = {}
+    for symbol, (market, ticker) in routes.items():
+        if market == 'KR':
+            source, currency = stock_prices, 'KRW'
+        elif market == 'COIN' or (market == 'AUTO' and ticker in crypto_prices):
+            source = crypto_prices
+            currency = 'USDC' if ticker.endswith('USDC') else 'USDT'
+        else:
+            source, currency = us_prices, 'USD'
+        if ticker in source:
+            prices[symbol] = source[ticker]
+            currencies[symbol] = currency
+    return prices, currencies
 
 def get_telegram_updates(last_id):
     if not TELEGRAM_TOKEN: return []
@@ -101,15 +193,22 @@ def process_commands(alarms, state):
         if cmd == '/추가' and len(parts) >= 4:
             symbol = parts[1].upper()
             try:
+                split_symbol(symbol)
                 target = float(parts[2])
-                condition = 'above' if parts[3].lower() in ['이상', 'above', '상승'] else 'below'
+                if not math.isfinite(target) or target <= 0:
+                    raise ValueError('Target must be positive and finite')
+                conditions = {
+                    '이상': 'above', 'above': 'above', '상승': 'above',
+                    '이하': 'below', 'below': 'below', '하락': 'below',
+                }
+                condition = conditions[parts[3].lower()]
                 
                 if symbol not in alarms:
                     alarms[symbol] = []
                 alarms[symbol].append({'target': target, 'condition': condition})
                 send_telegram(f"✅ 알람 추가 완료!\n종목: {symbol}\n목표가: {target} ({condition})")
-            except:
-                send_telegram("❌ 잘못된 형식입니다.\n사용법: /추가 BTCUSDT 90000 above")
+            except (ValueError, KeyError):
+                send_telegram("❌ 잘못된 형식입니다.\n사용법: /추가 US:AAPL 250 이상\n국장: /추가 005930 70000 이상\n코인: /추가 BTCUSDT 90000 이상")
                 
         elif cmd == '/목록':
             if not alarms:
@@ -140,12 +239,7 @@ def main():
     state_changed = process_commands(alarms, state)
     
     # 2. 가격 조회 준비
-    crypto_symbols = [s for s in alarms.keys() if not s.isdigit()] # 숫자가 아니면 코인(또는 해외주식)으로 취급
-    stock_symbols = [s for s in alarms.keys() if s.isdigit()]      # 숫자로만 구성되면 국장으로 취급
-    
-    current_prices = {}
-    current_prices.update(fetch_binance_prices(crypto_symbols))
-    current_prices.update(fetch_naver_prices(stock_symbols))
+    current_prices, currencies = fetch_alarm_prices(alarms.keys())
     
     # 3. 알람 검사 및 발송/삭제
     alarms_changed = False
@@ -167,10 +261,12 @@ def main():
                 triggered = True
                 
             if triggered:
-                msg = f"🚨 [가격 도달!] {symbol}\n현재가: {price:,}\n설정가: {target:,} ({ctype})"
-                send_telegram(msg)
-                alarms_changed = True
-                # Triggered alarm is NOT added back to remaining_conditions
+                currency = currencies[symbol]
+                msg = f"🚨 [가격 도달!] {symbol}\n현재가: {price:,} {currency}\n설정가: {target:,} {currency} ({ctype})"
+                if send_telegram(msg):
+                    alarms_changed = True
+                else:
+                    remaining_conditions.append(cond)
             else:
                 remaining_conditions.append(cond)
                 
