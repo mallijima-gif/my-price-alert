@@ -227,7 +227,8 @@ class CloudAlerts:
 
     def configure_telegram(self, payload):
         from .price_alerts import Telegram
-        token, chat_id = str(payload.get('token', '')).strip(), str(payload.get('chat_id', '')).strip()
+        token = str(payload.get('token', '')).strip()
+        chat_id = str(payload.get('chat_id', '')).strip() or (self.local.vault.get('telegram') or {}).get('chat_id', '')
         if not re.fullmatch(r'[0-9]{5,20}:[A-Za-z0-9_-]{25,120}', token) or not re.fullmatch(r'-?[0-9]{5,20}', chat_id):
             raise ValueError('봇 토큰과 Chat ID를 확인하세요.')
         Telegram().verify(token, chat_id)
