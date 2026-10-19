@@ -222,6 +222,7 @@ class PriceAlerts:
             configured = self.vault.exists('telegram')
             telegram = {'configured': configured, 'enabled': self._config(db, 'telegram_enabled', False),
                         'legacy_confirmed': self._config(db, 'legacy_confirmed', False),
+                        'verification_pending': self._config(db, 'telegram_verification_pending', False),
                         **self._config(db, 'telegram_info', {})}
             worker = {'running': bool(self.thread and self.thread.is_alive()), 'last_check': self._config(db, 'last_check'),
                       'error': self._config(db, 'worker_error', ''), 'interval': 30}
@@ -248,9 +249,18 @@ class PriceAlerts:
             self.vault.put('telegram', {'token': token, 'chat_id': chat_id})
             with self.connect() as db:
                 self._put(db, 'telegram_info', info)
+                self._put(db, 'telegram_verification_pending', False)
                 self._put(db, 'telegram_enabled', False)
                 self._put(db, 'legacy_confirmed', False)
         return {'message': '봇·수신 채팅 확인 후 암호화 저장했습니다. 테스트 발송과 이전 실행 중지를 확인한 뒤 알림을 켜세요.'}
+
+    def stage_telegram(self, payload):
+        with self.config_lock, self.connect() as db:
+            self._put(db, 'telegram_enabled', False)
+            self._put(db, 'legacy_confirmed', False)
+            self._put(db, 'telegram_verification_pending', True)
+            self._put(db, 'worker_error', '')
+        return {'message': '새 봇 연결을 암호화 저장했습니다. 클라우드에서 봇·수신 채팅을 확인한 뒤 테스트와 가격 알림을 켜세요.'}
 
     def find_telegram_chats(self, payload):
         token = str(payload.get('token', '')).strip()
@@ -270,6 +280,8 @@ class PriceAlerts:
             raise ValueError('알림 사용 여부를 확인하세요.')
         with self.config_lock, self.connect() as db:
             if enabled:
+                if self._config(db, 'telegram_verification_pending', False):
+                    raise ValueError('클라우드에서 봇·수신 채팅 확인을 마친 뒤 테스트하세요.')
                 if not self.vault.exists('telegram') or payload.get('legacy_confirmed') is not True:
                     raise ValueError('텔레그램 연결과 기존 알람 실행 중지를 먼저 확인하세요.')
                 verified = self._config(db,'telegram_info',{}).get('verified_at',0)
@@ -380,6 +392,8 @@ class PriceAlerts:
             raise ValueError('텔레그램 연결과 요청 번호를 확인하세요.')
         now = self.clock()
         with self.connect() as db:
+            if self._config(db, 'telegram_verification_pending', False):
+                raise ValueError('클라우드에서 봇·수신 채팅 확인을 마친 뒤 테스트하세요.')
             db.execute("INSERT OR IGNORE INTO deliveries(id,channel,body,status,is_test,created_at,updated_at) VALUES(?,'telegram',?,'pending',1,?,?)",
                        ('test-'+request_id,'트레이딩룸 가격 알림 연결 테스트입니다. 이 메시지를 받았다면 수신 채팅까지 발송됐습니다.',now,now))
         self.wake.set()
