@@ -33,7 +33,9 @@ class GitHubState:
     def __init__(self, config):
         self.config = config
         self.repository = config['repository']
-        if not re.fullmatch(r'[A-Za-z0-9_-]{20,255}', config.get('token', '')):
+        # GitHub installation tokens are opaque and may use long JWT format.
+        token = config.get('token', '')
+        if not isinstance(token, str) or not 20 <= len(token) <= 16384 or any(ord(c) <= 32 or ord(c) >= 127 for c in token):
             raise ValueError('GitHub 연결 키 형식을 확인하세요.')
         if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', self.repository):
             raise ValueError('GitHub 저장소 이름을 확인하세요.')
