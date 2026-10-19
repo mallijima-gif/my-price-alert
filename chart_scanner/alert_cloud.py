@@ -10,6 +10,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+import traceback
 import zlib
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -308,12 +309,16 @@ def main():
                   'branch': os.environ.get('GITHUB_REF_NAME', 'main'), 'state_key': os.environ['TRADING_ROOM_ALERT_KEY']}
         telegram = json.loads(os.environ['TRADING_ROOM_TELEGRAM'])
         run_cloud_once(GitHubState(config), telegram)
-    except Exception:
-        # Never print a request URL, token, message body, or trading details.
-        print('Cloud alert cycle failed; encrypted state and delivery claims are preserved.')
+    except Exception as exc:
+        # Only allowlisted source names and line numbers; exception text may contain secrets.
+        frames = traceback.extract_tb(exc.__traceback__)
+        location = ' > '.join(f'{Path(frame.filename).name}:{frame.lineno}' for frame in frames
+                              if Path(frame.filename).name in ('alert_cloud.py', 'price_alerts.py'))
+        print(f'Cloud alert cycle failed ({type(exc).__name__} at {location}); encrypted state and delivery claims are preserved.')
         raise SystemExit(1) from None
     print('Cloud alert cycle completed.')
 
 
 if __name__ == '__main__':
     main()
+
