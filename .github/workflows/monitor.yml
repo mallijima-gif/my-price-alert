@@ -1,39 +1,37 @@
-# Scheduled alerts moved to the local Trading Room app.
-# Manual dispatch is retained for recovery; the old Telegram token was revoked.
-name: Price Alert Monitor
+name: Trading Room Cloud Price Alerts
 
 on:
+  schedule:
+    - cron: '2-57/5 * * * *'
+  push:
+    paths:
+      - 'trading-room/state.enc'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+concurrency:
+  group: trading-room-cloud-price-alerts
+  cancel-in-progress: false
+
 jobs:
-  check-price:
+  monitor:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
+    timeout-minutes: 5
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
         with:
-          python-version: '3.10'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run monitor script
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install alert dependencies
+        run: python -m pip install 'cryptography==46.0.5'
+      - name: Monitor encrypted Trading Room alerts
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python monitor.py
+          GITHUB_TOKEN: ${{ github.token }}
+          TRADING_ROOM_ALERT_KEY: ${{ secrets.TRADING_ROOM_ALERT_KEY }}
+          TRADING_ROOM_TELEGRAM: ${{ secrets.TRADING_ROOM_TELEGRAM }}
+        run: python -m chart_scanner.alert_cloud --worker
 
-      - name: Commit and push changes
-        run: |
-          git config --local user.name "github-actions[bot]"
-          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add alarms.json bot_state.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update: 알람 및 상태 갱신 [skip ci]" && git push)
