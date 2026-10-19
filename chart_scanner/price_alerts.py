@@ -236,7 +236,8 @@ class PriceAlerts:
     def configure_telegram(self, payload):
         if self.cloud:
             return self.cloud.configure_telegram(payload)
-        token, chat_id = str(payload.get('token', '')).strip(), str(payload.get('chat_id', '')).strip()
+        token = str(payload.get('token', '')).strip()
+        chat_id = str(payload.get('chat_id', '')).strip() or (self.vault.get('telegram') or {}).get('chat_id', '')
         if not re.fullmatch(r'[0-9]{5,20}:[A-Za-z0-9_-]{25,120}', token) or not re.fullmatch(r'-?[0-9]{5,20}', chat_id):
             raise ValueError('봇 토큰과 숫자 Chat ID를 확인하세요.')
         with self.config_lock:
@@ -561,3 +562,4 @@ class PriceAlerts:
         self.wake.set()
         if self.thread:
             self.thread.join(timeout=2)
+
