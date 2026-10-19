@@ -288,6 +288,9 @@ class PriceAlerts:
                 if not db.execute("SELECT 1 FROM deliveries WHERE is_test=1 AND status='sent' AND updated_at>=?",(verified,)).fetchone():
                     raise ValueError('테스트 알림을 보내 실제 발송 성공을 먼저 확인하세요.')
                 self._put(db, 'legacy_confirmed', True)
+            if enabled and not self._config(db, 'telegram_enabled', False):
+                # Re-arm after a deliberate monitoring pause; do not use prices from before it.
+                db.execute("UPDATE alerts SET last_price=NULL,source_ts=NULL,last_checked=NULL,error='',version=version+1 WHERE channel='telegram' AND condition='touch' AND status='active'")
             self._put(db, 'telegram_enabled', enabled)
         self.wake.set()
         return {'message': '텔레그램 가격 알림을 켰습니다.' if enabled else '텔레그램 발송을 중지했습니다. 알림은 보존됩니다.'}
@@ -308,9 +311,9 @@ class PriceAlerts:
             valid = re.fullmatch(r'[A-Z0-9][A-Z0-9.-]{0,19}', symbol)
         if not valid:
             raise ValueError('선택한 가격 출처의 종목 코드를 확인하세요.')
-        target, condition, channel = positive(payload.get('target')), payload.get('condition'), payload.get('channel')
-        if condition not in ('above', 'below') or channel not in ('screen', 'telegram'):
-            raise ValueError('이상·이하 조건과 알림 수단을 선택하세요.')
+        target, condition, channel = positive(payload.get('target')), payload.get('condition', 'touch'), payload.get('channel')
+        if condition not in ('touch', 'above', 'below') or channel not in ('screen', 'telegram'):
+            raise ValueError('가격 도달·이상·이하 조건과 알림 수단을 선택하세요.')
         request_id = str(payload.get('request_id', ''))
         if not re.fullmatch(r'[A-Za-z0-9_-]{8,80}', request_id):
             raise ValueError('요청 번호를 확인하세요.')
@@ -367,6 +370,8 @@ class PriceAlerts:
                 new = 'paused'
             else:
                 raise ValueError('지원하지 않는 변경입니다.')
+            if action == 'resume' and row['condition'] == 'touch':
+                db.execute("UPDATE alerts SET last_price=NULL,source_ts=NULL,last_checked=NULL,error='' WHERE id=?",(alert_id,))
             db.execute('UPDATE alerts SET status=?,version=version+1,updated_at=? WHERE id=?',(new,now,alert_id))
         self.wake.set()
         return {'message': '알림 상태를 변경했습니다.'}
@@ -408,7 +413,8 @@ class PriceAlerts:
             if value['source'] != key[0] or value['currency'] != SOURCES[key[0]][2]:
                 raise ValueError('가격 출처 또는 통화 불일치')
             value['price'] = positive(value['price'])
-            age = self.clock()-float(value['source_ts'])
+            value['source_ts'] = float(value['source_ts'])
+            age = self.clock()-value['source_ts']
             if not math.isfinite(age) or not -10 <= age <= 180:
                 raise ValueError('장 마감·휴장 또는 지연 시세라 발동하지 않았습니다.')
             self.quote_cache[key] = (self.clock(),value,'')
@@ -442,15 +448,27 @@ class PriceAlerts:
                     current = db.execute('SELECT status,version FROM alerts WHERE id=?',(row['id'],)).fetchone()
                     if not current or current['status']!='active' or current['version']!=row['version']:
                         continue
+                    if row['channel']=='telegram' and not self._config(db, 'telegram_enabled', False):
+                        continue
+                    if value and row['source_ts'] is not None and value['source_ts'] <= row['source_ts']:
+                        # An older/same market tick must not move the crossing baseline backwards.
+                        db.execute('UPDATE alerts SET last_checked=? WHERE id=?',(now,row['id']))
+                        continue
                     db.execute('UPDATE alerts SET last_checked=?,error=?,last_price=?,source_ts=? WHERE id=?',
                                (now,error,value['price'] if value else row['last_price'],value['source_ts'] if value else row['source_ts'],row['id']))
                     if not value:
                         continue
                     price,target = Decimal(value['price']),Decimal(row['target'])
-                    hit = price>=target if row['condition']=='above' else price<=target
+                    if row['condition'] == 'touch':
+                        previous = Decimal(row['last_price']) if row['last_price'] is not None else None
+                        hit = price == target or (previous is not None and
+                              ((previous < target < price) or (price < target < previous)))
+                    else:
+                        hit = price>=target if row['condition']=='above' else price<=target
                     if not hit:
                         continue
-                    text = f"가격 도달 · {row['name']} ({row['symbol']})\n{SOURCES[row['source']][0]}\n현재가 {value['price']} {value['currency']} · 목표 {row['target']} {'이상' if row['condition']=='above' else '이하'}\n시세 시각 {datetime.fromtimestamp(value['source_ts'],ZoneInfo('Asia/Seoul')).isoformat(timespec='seconds')}"
+                    condition_text = {'touch':'도달·통과 (위·아래 모두)','above':'이상','below':'이하'}[row['condition']]
+                    text = f"가격 도달 · {row['name']} ({row['symbol']})\n{SOURCES[row['source']][0]}\n현재가 {value['price']} {value['currency']} · 목표 {row['target']} {condition_text}\n시세 시각 {datetime.fromtimestamp(value['source_ts'],ZoneInfo('Asia/Seoul')).isoformat(timespec='seconds')}"
                     db.execute("INSERT OR IGNORE INTO deliveries(id,alert_id,channel,body,status,created_at,updated_at) VALUES(?,?,?,?,'pending',?,?)",
                                (uuid.uuid4().hex,row['id'],row['channel'],text,now,now))
                     db.execute("UPDATE alerts SET status='triggered',version=version+1,updated_at=? WHERE id=?",(now,row['id']))
