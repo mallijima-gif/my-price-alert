@@ -1,8 +1,8 @@
+# Scheduled alerts moved to the local Trading Room app.
+# Manual dispatch is retained for recovery; the old Telegram token was revoked.
 name: Price Alert Monitor
 
 on:
-  schedule:
-    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
