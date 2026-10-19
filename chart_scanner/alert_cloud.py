@@ -226,18 +226,16 @@ class CloudAlerts:
         raise ValueError('클라우드 저장 상태를 확인하세요.')
 
     def configure_telegram(self, payload):
-        from .price_alerts import Telegram
         token = str(payload.get('token', '')).strip()
         chat_id = str(payload.get('chat_id', '')).strip() or (self.local.vault.get('telegram') or {}).get('chat_id', '')
         if not re.fullmatch(r'[0-9]{5,20}:[A-Za-z0-9_-]{25,120}', token) or not re.fullmatch(r'-?[0-9]{5,20}', chat_id):
             raise ValueError('봇 토큰과 Chat ID를 확인하세요.')
-        Telegram().verify(token, chat_id)
         self.mutate('telegram_mode', {'enabled': False})
         config = {'token': token, 'chat_id': chat_id}
         self.client.secret('TRADING_ROOM_TELEGRAM', json.dumps(config))
         # Keep the verified replacement only after GitHub accepted the secret.
         self.local.vault.put('telegram', config)
-        return self.mutate('configure_telegram', payload)
+        return self.mutate('stage_telegram', {})
 
 
 def connect_cloud(service, payload):
@@ -298,6 +296,22 @@ def run_cloud_once(client, telegram, feeds=None):
             sha = client.write(snapshot(service), sha)
 
         service.checkpoint = checkpoint
+        with service.connect() as db:
+            verify_pending = service._config(db, 'telegram_verification_pending', False)
+        if verify_pending:
+            from .price_alerts import TelegramFailure
+            try:
+                info = service.telegram.verify(telegram['token'], telegram['chat_id'])
+            except TelegramFailure:
+                with service.connect() as db:
+                    service._put(db, 'worker_error', '클라우드에서 봇·수신 채팅 확인에 실패했습니다. 새 토큰과 수신 채팅을 확인하세요.')
+                checkpoint()
+                raise
+            with service.connect() as db:
+                service._put(db, 'telegram_info', info)
+                service._put(db, 'telegram_verification_pending', False)
+                service._put(db, 'worker_error', '')
+            checkpoint()
         service.run_once()
         checkpoint()
         return service.overview()
